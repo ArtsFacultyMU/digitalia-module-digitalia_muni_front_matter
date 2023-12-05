@@ -1,0 +1,476 @@
+<?php
+
+use Drupal\file\Entity\File;
+use Drupal\Core\Url;
+
+use mikehaertl\pdftk\Pdf;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+
+$MYLIBDIR="/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter";
+
+require_once("$MYLIBDIR/custom_libs/tfpdf/tfpdf.php");
+require_once("$MYLIBDIR/vendor/autoload.php");
+
+function digitalia_muni_front_matter_file_download($uri) {
+
+  if(!strpos($uri, 'pdf/') and !strpos($uri, 'monography/')){
+    return NULL;
+  }
+
+  $files = \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => $uri]);
+  $file_original = reset($files);
+	
+  if (!$file_original) {
+    return NULL;
+  }
+
+  $result = \Drupal::service('file.usage')->listUsage($file_original);
+
+  if (empty($result)) {
+    return NULL;
+  }
+
+  $media_id = array_keys($result['file']['media'])[0];
+  $media = \Drupal\media\Entity\Media::load($media_id);
+
+  // if Media type is other than Document (primary), download file directly
+  
+  if ($media->bundle() != 'document') {
+    return NULL; 
+  } 
+
+  $filename = $file_original->getFilename();
+  $temp_pdf = "/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/tmp/$filename";
+
+  if (file_exists($temp_pdf)) {
+    return NULL;
+  }
+
+  $location = '/var/www/html/drupal/web/sites/default/files/pdf/'.$filename;
+
+  if (!file_exists($location)) {
+    file_put_contents($temp_pdf, '');
+    $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
+
+    $data = file_get_contents($url);
+
+    if (!$data) {
+     \Drupal::logger('digitalia_muni_front_matter')->notice('File '.$filename.' is not public. Forefront was not generated.');
+      unlink($temp_pdf);
+      return NULL;
+    }
+
+    file_put_contents($temp_pdf, $data);
+
+    \Drupal::logger('digitalia_muni_front_matter')->notice('File '.$filename.' is not in public files.');
+    \Drupal::logger('digitalia_muni_front_matter')->notice('Generating forefront for file '.$filename);
+    $result = generate_front_matter($media);
+    if (!$result) {
+      unlink($temp_pdf);
+      \Drupal::logger('digitalia_muni_front_matter')->warning('Could not generate forefront for file '.$filename.'.');
+      return NULL;
+    }
+    \Drupal::logger('digitalia_muni_front_matter')->notice('Created forefront for file '.$filename);
+  }
+
+  $new_url = '/sites/default/files/pdf/'.$filename;
+
+  \Drupal::logger('digitalia_muni_front_matter')->notice('Redirected to '.$new_url);
+  $response = new RedirectResponse($new_url);
+  $response->send();
+}
+
+// Delete PDFs with generated forefronts from public files if PDF was replaced.
+// New file with forefront will be generated at next download.
+function digitalia_muni_front_matter_media_update(\Drupal\Core\Entity\EntityInterface $entity) {
+
+  if ($entity->bundle() == 'document') {
+
+    if ($entity->original) {
+      $old_file_id = $entity->original->toArray()['field_media_document'][0]['target_id'];
+      if ($entity->toArray()['field_media_document'][0]['target_id'] != $old_file_id) {
+        \Drupal::logger('digitalia_muni_front_matter')->notice('PDF file was updated in media '.$entity->getName());
+        $old_filename =  File::load($old_file_id)->getFilename();
+        $old_filepath = '/var/www/html/drupal/web/sites/default/files/pdf/'.$old_filename;
+        if (file_exists($old_filepath)) { 
+          unlink($old_filepath);
+        }
+        \Drupal::logger('digitalia_muni_front_matter')->notice('Removed '.$old_filename.' from public files.');
+      } else {
+        \Drupal::logger('digitalia_muni_front_matter')->notice('PDF file has not changed in media '.$entity->getName());
+        return;
+      }
+    }
+  }
+}
+
+// Delete PDFs with generated forefronts from public files if any relevant field was changed.
+// New forefront will be generated at next download.
+function digitalia_muni_front_matter_node_update(\Drupal\Core\Entity\EntityInterface $entity) {
+
+  $types = ['article', 'book', 'chapter', 'issue', 'volume', 'book_series'];
+  if (!in_array($entity->bundle(), $types)) {
+    return;
+  }
+
+  $original = $entity->original->toArray();
+  $current = $entity->toArray();
+
+  $changed = FALSE;
+  $fields = ['title', 'field_author', 'field_contributor', 'field_doi', 'field_handle', 
+'field_member_of', 'field_pagination', 'field_rights', 'field_isbn', 'field_issn'];
+
+  foreach ($fields as $field) {
+    if ($entity->hasField($field)) {
+      if ($original[$field] != $current[$field]) {
+        \Drupal::logger('digitalia_muni_front_matter')->notice('Field '.$field.' was updated.');
+        $changed = TRUE;
+      }
+    }
+  }
+
+  if (!$changed) {
+    return;
+  }
+
+  if ($entity->bundle() == 'article' or $entity->bundle() == 'chapter' or $entity->bundle() == 'book') {
+    $media_result = \Drupal::entityTypeManager()->getStorage('media')->loadByProperties(['field_media_of' => $entity->id(), 'bundle' => 'document']);
+    if (!empty($media_result)) {
+      $media = reset($media_result);
+      $filename =  File::load($media->get('field_media_document')->getValue()[0]['target_id'])->getFilename();
+      unlink('/var/www/html/drupal/web/sites/default/files/pdf/'.$filename);
+      \Drupal::logger('digitalia_muni_front_matter')->notice('Removed '.$filename.' from public files.');
+    }
+  }
+
+  if ($entity->bundle() == 'issue' or $entity->bundle() == 'book') {
+    $descendants = \Drupal::entityTypeManager()->getStorage('node')->loadByProperties(['field_member_of' => $entity->id()]);
+    foreach ($descendants as $desc) {
+      $media_result = \Drupal::entityTypeManager()->getStorage('media')->loadByProperties(['field_media_of' => $desc->id(), 'bundle' => 'document']);
+      if (!empty($media_result)) {
+        $media = reset($media_result);
+        $filename =  File::load($media->get('field_media_document')->getValue()[0]['target_id'])->getFilename();
+        unlink('/var/www/html/drupal/web/sites/default/files/pdf/'.$filename);
+        \Drupal::logger('digitalia_muni_front_matter')->notice('Removed '.$filename.' from public files.');
+      }
+    }
+  }
+
+  if ($entity->bundle() == 'volume' or $entity->bundle() == 'book_series') {
+    $descendants = \Drupal::entityTypeManager()->getStorage('node')->loadByProperties(['field_member_of' => $entity->id()]);
+    foreach ($descendants as $desc) {
+
+      $descendants_2 = \Drupal::entityTypeManager()->getStorage('node')->loadByProperties(['field_member_of' => $desc->id()]);
+      foreach ($descendants_2 as $desc_2) {
+
+        $media_result = \Drupal::entityTypeManager()->getStorage('media')->loadByProperties(['field_media_of' => $desc_2->id(), 'bundle' => 'document']);
+        if (!empty($media_result)) {
+          $media = reset($media_result);
+          $filename =  File::load($media->get('field_media_document')->getValue()[0]['target_id'])->getFilename();
+          unlink('/var/www/html/drupal/web/sites/default/files/pdf/'.$filename);
+          \Drupal::logger('digitalia_muni_front_matter')->notice('Removed '.$filename.' from public files.');
+        }        
+      }
+    }
+  }
+}
+
+function generate_front_matter($entity) {
+
+  $nid = $entity->get('field_media_of')->getValue()[0]['target_id'];
+  $node = \Drupal\node\Entity\Node::load($nid);
+  if (!$node) {
+    \Drupal::logger('digitalia_muni_front_matter')->warning('Media \''.$entity->getName().'\' has empty field Media of.');
+    return NULL;
+  }
+
+  if (empty($node->get('field_member_of')->getValue()) or !$member_of = \Drupal\node\Entity\Node::load($node->get('field_member_of')->getValue()[0]['target_id'])) {
+    \Drupal::logger('digitalia_muni_front_matter')->warning('Node \''.$node->getTitle().'\' with nid '.$node->id().' has empty field Member of.');
+    return NULL;
+  }
+
+  $citation_title = "";
+  $citation_rest = "";
+  $citation_book_authors = "";
+  $type = $node->getType();
+
+  if ($type == 'article') {
+
+    $issue = $member_of;
+
+    if (empty($issue->get('field_member_of')->getValue()) or false == $volume = \Drupal\node\Entity\Node::load($issue->get('field_member_of')->getValue()[0]['target_id'])) {
+      \Drupal::logger('digitalia_muni_front_matter')->warning('Issue \''.$issue->getTitle().'\' with nid '.$issue->id().' has empty field Member of.');
+      return NULL;
+    }
+
+    if (empty($volume->get('field_member_of')->getValue()) or false == $serial = \Drupal\node\Entity\Node::load($volume->get('field_member_of')->getValue()[0]['target_id'])) {
+      \Drupal::logger('digitalia_muni_front_matter')->warning('Volume \''.$volume->getTitle().'\' with nid '.$volume->id().' has empty field Member of.');
+      return NULL;
+    }
+
+    $citation_title = $serial->getTitle().".";
+    if (empty($issue->get('field_publication_year')->getValue()) or false == $year = $issue->get('field_publication_year')->getValue()[0]['value']) {
+      \Drupal::logger('digitalia_muni_front_matter')->warning('Issue \''.$issue->getTitle().'\' with nid '.$issue->id().' has empty field Publication year.');
+      return NULL;
+    }
+
+    $pagination = empty($node->get('field_pagination')->getValue()) ? [] : $node->get('field_pagination')->getValue()[0];
+    $page_from = empty($pagination) ? "" : $pagination['first'];
+    $page_to = empty($pagination) ? "" : $pagination['second'];
+    $citation_rest = $year.", vol. ".$volume->getTitle().", iss. ".$issue->getTitle().", pp. ".$page_from."-".$page_to;
+  } elseif ($type == 'book') {
+
+    $edition = empty($node->get('field_edition')->getValue()) ? '' : $node->get('field_edition')->getValue()[0]['value'];
+    $publisher = empty($node->get('field_publisher')->getValue()) ? '' : $node->get('field_publisher')->getValue()[0]['value'];
+    $place = empty($node->get('field_publication_place')->getValue()) ? '' : $node->get('field_publication_place')->getValue()[0]['value'].': ';
+    $year = empty($node->get('field_publication_year_text')->getValue()) ? '' : $node->get('field_publication_year_text')->getValue()[0]['value'];
+
+    $citation_title = $node->getTitle();
+    $citation_rest = $edition." ".$place.$publisher.", ".$year;
+  } elseif ($type == 'chapter') {
+    
+    $book = $member_of;
+    $edition = empty($book->get('field_edition')->getValue()) ? '' : $book->get('field_edition')->getValue()[0]['value'];
+    $publisher = empty($book->get('field_publisher')->getValue()) ? '' : $book->get('field_publisher')->getValue()[0]['value'];
+    $place = empty($book->get('field_publication_place')->getValue()) ? '' : $book->get('field_publication_place')->getValue()[0]['value'].': ';
+    $year = empty($book->get('field_publication_year_text')->getValue()) ? '' : $book->get('field_publication_year_text')->getValue()[0]['value'];
+    $pagination = empty($node->get('field_pagination')->getValue()) ? [] : $node->get('field_pagination')->getValue()[0];
+    $page_from = empty($pagination) ? "" : $pagination['first'];
+    $page_to = empty($pagination) ? "" : $pagination['second'];
+    $page_delimiter = empty($page_to) ? "" : "-";
+    $citation_book_authors = "In: ";
+    $book_field_author = $book->hasField('field_author') ? $book->get('field_author')->getValue() : [];
+    foreach ($book_field_author as $key => $ref) {
+      $name = \Drupal\node\Entity\Node::load($ref['target_id'])->getTitle();
+      $citation_book_authors = $citation_book_authors.$name;
+      if ($key == array_key_last($book_field_author)) {
+        $citation_book_authors = $citation_book_authors.". ";
+      } else {
+        $citation_book_authors = $citation_book_authors."; ";
+      }
+    }
+    $book_field_contributor = $book->hasField('field_contributor') ? $book->get('field_contributor')->getValue() : [];
+    foreach ($book_field_contributor as $key => $ref) {
+      if ($ref['rel_type'] == 'editor') {
+        $name = \Drupal\node\Entity\Node::load($ref['target_id'])->getTitle();
+        $citation_rest = $citation_rest.$name." (editor)";
+        if ($key == array_key_last($book_field_contributor)) {
+          $citation_rest = $citation_rest.". ";
+        } else {
+          $citation_rest = $citation_rest."; ";
+        }
+      }
+    }
+    $citation_title =  $book->getTitle().".";
+    $citation_rest = $citation_rest.$edition." ".$place.$publisher.", ".$year.", pp. ".$page_from.$page_delimiter.$page_to;
+  }
+
+  $title = $node->getTitle();
+
+  $field_author = $node->hasField('field_author') ? $node->get('field_author')->getValue() : [];
+  $authors = array();
+  foreach ($field_author as $ref) {
+    $name = \Drupal\node\Entity\Node::load($ref['target_id'])->getTitle();
+    $authors[] = $name;
+  }
+
+  $field_contributor = $node->hasField('field_contributor') ? $node->get('field_contributor')->getValue() : [];
+  $editors = array();
+  foreach ($field_contributor as $ref) {
+    if ($ref['rel_type'] == 'editor') {
+      $name = \Drupal\node\Entity\Node::load($ref['target_id'])->getTitle();
+      $editors[] = $name;
+    }
+  }
+  $pageurl = "https://digilib.phil.muni.cz/...";
+  $handle_prefix = "https://hdl.handle.net/11222.digilib/";
+  $handle = empty($node->get('field_handle')->getValue()) ? '' : $node->get('field_handle')->getValue()[0]['value'];
+  $handle_complete = $handle_prefix . $handle;
+  $doi_prefix = "https://doi.org/";
+  $doi = $node->get('field_doi')->getValue() ? $node->get('field_doi')->getValue()[0]['value'] : '' ;
+  $doi_complete = empty($doi) ? '' : $doi_prefix . $doi;
+    
+  $license_id = $node->get('field_rights')->getValue() ? $node->get('field_rights')->getValue()[0]['target_id'] : '';
+  $license = empty($license_id) ? '' : \Drupal\taxonomy\Entity\Term::load($license_id)->getName();
+  $license_link = empty($license_id) ? '' : \Drupal\taxonomy\Entity\Term::load($license_id)->get('field_external_uri')->getValue()[0]['uri'];
+  $footer = "Copyright MU 2022";
+  $isMonograph = $node->getType() == 'book' ? TRUE : FALSE;
+  $isbn_source = $isMonograph ? $node : $member_of;
+  $field_isbn = $isbn_source->hasField('field_isbn') ? $isbn_source->get('field_isbn')->getValue() : [];
+  $isbn_online = "";
+  $isbn_print = "";
+  foreach ($field_isbn as $val) {
+    if (str_contains($val['value'], 'online')) {
+      $isbn_online = $val['value'];
+    } else {
+      $isbn_print = $val['value'];
+    }
+  }
+  $field_issn = $member_of->hasField('field_issn') ? $member_of->get('field_issn')->getValue() : [];
+  $issn_online = "";
+  $issn_print = "";
+  foreach ($field_issn as $val) {
+    if (str_contains($val['value'], 'online')) {
+      $issn_online = $val['value'];
+    } else {
+      $issn_print = $val['value'];
+    }
+  }
+
+  $isbn = strlen(trim($isbn_print)) > 0 ? "ISBN ".$isbn_print : "";
+  if (strlen(trim($isbn_online)) > 0) {
+    $isbn .= strlen($isbn) > 0 ? "; " : "";
+    $isbn .= "ISBN ".$isbn_online;
+  }
+  $issn = strlen(trim($issn_print)) > 0 ? "ISSN ".$issn_print : "";
+  if (strlen(trim($issn_online)) > 0) {
+    $issn .= strlen($issn) > 0 ? "; " : "";
+    $issn .= "ISSN ".$issn_online;
+  } 
+
+  // Bea: end of the block that must be filled in
+  // constants defininy fonts size etc.
+  $fontsize = 11;
+  $linesize = 14;
+  $cover_pdf = "/tmp/$handle-cover.pdf";
+
+  // get original file
+  $file_original = File::load($entity->field_media_document->target_id);
+  $file_name = $file_original->getFilename();
+  $input_pdf = "/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/tmp/$file_name";
+  $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
+  $originalpdf = new mikehaertl\pdftk\Pdf($input_pdf);
+  $data = $originalpdf->getData();
+  $dims = explode(" ", $data['PageMedia'][0]['Dimensions']);
+  $origsizeX = $dims[0];
+  $origsizeY = $dims[1];
+  // set page margin size dynamically (smaller pages => smaller margin)
+  $marginssize = $origsizeX*0.1;
+  // start to prepare cover.pdf
+  $pdf = new tFPDF("P", 'pt', array($origsizeX, $origsizeY));
+  $pdf->AddFont('Myfont', '', "candara.ttf", true);
+  $pdf->AddFont('MyfontB', '', "candarab.ttf", true);
+  $pdf->AddFont('MyfontI', '', "candarai.ttf", true);
+  $pdf->setRightMargin($marginssize);
+  $pdf->setLeftMargin($marginssize);
+  $pdf->AddPage();
+  if ($origsizeY < 570) {
+    // if page is smaller than 570pt it's safer to use small space on top
+    $pdf->Ln(5);
+  }
+  else {
+    $pdf->Ln(round($origsizeY*0.1));
+  }
+
+  // authors
+  $pdf->SetFont('Myfont', '', $fontsize);
+  $authorsprint = "";
+  foreach($authors as $author) {
+    $authorsprint .= $author . "; ";
+  }
+  $authorsprint = substr($authorsprint, 0, -2);
+  $pdf->Write($linesize, $authorsprint);
+  $pdf->Ln($linesize+10);
+  // editors
+  $pdf->SetFont('Myfont', '', $fontsize);
+  $editorsprint = "";
+  foreach($editors as $editor) {
+    $editorsprint .= $editor . " (editor); ";
+  }
+  $editorsprint = substr($editorsprint, 0, -2);
+  $pdf->Write($linesize, $editorsprint);
+  $pdf->Ln($linesize+30);
+  // title
+  $pdf->SetFont('MyfontB', '', $fontsize);
+  $pdf->Write($linesize, $title);
+    
+  $pdf->Ln($linesize+30);
+  // citation
+  if ($isMonograph) {
+    $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Write($linesize, $bookauthors . ". ");
+  }
+  $pdf->SetFont('MyfontI', '', $fontsize);
+  $pdf->Write($linesize, $citation_title . " ");
+  if ($isMonograph && count($editors) > 0) {
+    $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Write($linesize, $editorsprint . ". ");
+  }
+  $pdf->SetFont('Myfont', '', $fontsize);
+  $pdf->Write($linesize, $citation_rest);
+  $pdf->Ln($linesize+10);
+  // ISBN, ISSN
+  $pdf->SetFont('Myfont', '', $fontsize);
+  if (strlen($isbn) > 0) { $pdf->Write($linesize, "$isbn"); }
+  $pdf->Ln($linesize);
+  if (strlen($issn) > 0) { $pdf->Write($linesize, "$issn"); }
+  $pdf->Ln($linesize+40);
+  // identifiers
+  if (strlen($doi) > 0) {
+    $pdf->Write($linesize, "Stable URL (DOI): ");
+    $pdf->SetFont('Myfont', 'U', $fontsize);
+    $pdf->Write($linesize, $doi_complete, $doi_complete);
+    $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Ln($linesize);
+  }     
+  $pdf->Write($linesize, "Stable URL (handle): ");
+  $pdf->SetFont('Myfont', 'U', $fontsize);
+  $pdf->Write($linesize, $handle_complete, $handle_complete);
+  $pdf->SetFont('Myfont', '', $fontsize);
+  $pdf->Ln($linesize);
+  // license
+  if (strlen($license) > 0) {
+    $pdf->Write($linesize, "License: ");
+    $pdf->SetFont('Myfont', 'U', $fontsize);
+    $pdf->Write($linesize, $license, $license_link);
+    $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Ln($linesize);
+  }
+
+  $version = date("d. m. Y");
+  if (strlen($version) > 0) {
+    $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Write($linesize, "Access Date: $version");
+  }
+  // footer
+  // if page is smaller than 440 pt the Terms of use text is 3-lines and we must push it higher
+  $footerY = $origsizeX < 440 ? -150 : -130;
+  $pdf->SetY($footerY);
+  $pdf->SetFont('Myfont', '', 10);
+  $pdf->Write(14, "Terms of use: Digital Library of the Faculty of Arts, Masaryk University provides access to digitized documents strictly for personal use, unless otherwise specified.");
+  $pdf->Ln(20);
+  $pdf->SetFillColor(0,0,0);
+  $pdf->Cell(0,0.3,"",0,1,'C',true);
+  $actualY = $pdf->GetY();
+  $pdf->setY($actualY+10);
+  $pdf->setX($marginssize+5);
+  $pdf->Image("/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/custom_libs/images/logo.png", null, null, 100);
+  $pdf->SetFont('Myfont', '', 8);
+  $pdf->setY($actualY+10);
+  $pdf->setX(round($origsizeX/2));
+  if ($origsizeX < 490) {
+    // if page is not wide enough we must split the "Digital Library of..." text into two lines
+    $pdf->write(8, "Digital Library of the Faculty of Arts,");
+    $pdf->Ln(9);
+    $pdf->setX(round($origsizeX/2));
+    $pdf->write(8, "Masaryk University");
+  }
+  else {
+    $pdf->write(8, "Digital Library of the Faculty of Arts, Masaryk University");
+  }
+  $pdf->setX(round($origsizeX/2));
+  $pdf->Ln(12);
+  $pdf->setX(round($origsizeX/2));
+  $pdf->write(8, "digilib.phil.muni.cz");
+   
+  $pdf->Output("F", $cover_pdf);
+  $joinpdf = new mikehaertl\pdftk\Pdf([$cover_pdf, $input_pdf]);
+  $file_altered = $joinpdf->cat()->toString();
+  
+  //save to public files
+  $location = '/var/www/html/drupal/web/sites/default/files/pdf/'.$file_name;
+  $res = file_put_contents($location, $file_altered);
+  unlink($input_pdf);
+  unlink($cover_pdf);
+  return $location;
+}

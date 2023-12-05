@@ -1,0 +1,4 @@
+/vendor/
+/cache/
+composer.lock
+tests/test_data/output.pdf

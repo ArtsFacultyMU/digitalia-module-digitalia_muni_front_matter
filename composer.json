@@ -1,0 +1,6 @@
+{
+    "require": {
+        "mikehaertl/php-pdftk": "^0.12.1",
+        "faimmedia/fpdf-utf8": "^3.0"
+    }
+}
