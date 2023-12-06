@@ -354,14 +354,25 @@ function generate_front_matter($entity) {
   $pdf->setRightMargin($marginssize);
   $pdf->setLeftMargin($marginssize);
   $pdf->AddPage();
+  // set space between authors and title and title and citation
+  $biggerspace = 30;
   if ($origsizeY < 570) {
     // if page is smaller than 570pt it's safer to use small space on top
-    $pdf->Ln(5);
+	  $pdf->Ln(5);
+
+	  if ($origsizeY < 450) {
+	  	$pdf->Ln(0);
+		$biggerspace = 13;
+	  }
+
   }
   else {
     $pdf->Ln(round($origsizeY*0.1));
   }
 
+  //$pdf->SetFont('Myfont', '', $fontsize);
+  //$pdf->Write($linesize, "DEBUG: $origsizeX x $origsizeY");
+  //$pdf->Ln(10);
   // authors
   $pdf->SetFont('Myfont', '', $fontsize);
   $authorsprint = "";
@@ -379,15 +390,16 @@ function generate_front_matter($entity) {
   }
   $editorsprint = substr($editorsprint, 0, -2);
   $pdf->Write($linesize, $editorsprint);
-  $pdf->Ln($linesize+30);
+  $pdf->Ln($linesize+$biggerspace);
   // title
   $pdf->SetFont('MyfontB', '', $fontsize);
   $pdf->Write($linesize, $title);
     
-  $pdf->Ln($linesize+30);
+  $pdf->Ln($linesize+$biggerspace);
   // citation
   if ($isMonograph) {
     $pdf->SetFont('Myfont', '', $fontsize);
+    $pdf->Write($linesize, "In: ");
     $pdf->Write($linesize, $bookauthors . ". ");
   }
   $pdf->SetFont('MyfontI', '', $fontsize);
@@ -404,7 +416,7 @@ function generate_front_matter($entity) {
   if (strlen($isbn) > 0) { $pdf->Write($linesize, "$isbn"); }
   $pdf->Ln($linesize);
   if (strlen($issn) > 0) { $pdf->Write($linesize, "$issn"); }
-  $pdf->Ln($linesize+40);
+  $pdf->Ln($linesize+$biggerspace+10);
   // identifiers
   if (strlen($doi) > 0) {
     $pdf->Write($linesize, "Stable URL (DOI): ");
@@ -434,7 +446,13 @@ function generate_front_matter($entity) {
   }
   // footer
   // if page is smaller than 440 pt the Terms of use text is 3-lines and we must push it higher
-  $footerY = $origsizeX < 440 ? -150 : -130;
+  $footerY = -130;
+  if ($origsizeX < 440) { 
+    $footerY = -150; 
+    if ($origsizeX < 340) {
+      $footerY = -160;
+    }
+  }
   $pdf->SetY($footerY);
   $pdf->SetFont('Myfont', '', 10);
   $pdf->Write(14, "Terms of use: Digital Library of the Faculty of Arts, Masaryk University provides access to digitized documents strictly for personal use, unless otherwise specified.");
@@ -445,23 +463,28 @@ function generate_front_matter($entity) {
   $pdf->setY($actualY+10);
   $pdf->setX($marginssize+5);
   $pdf->Image("/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/custom_libs/images/logo.png", null, null, 100);
-  $pdf->SetFont('Myfont', '', 8);
+  $footer_font = 8;
+  $pdf->SetFont('Myfont', '', $footer_font);
   $pdf->setY($actualY+10);
   $pdf->setX(round($origsizeX/2));
   if ($origsizeX < 490) {
+    if ($origsizeX < 380) {
+      $footer_font = 7;
+      $pdf->SetFont('Myfont', '', $footer_font);
+    }
     // if page is not wide enough we must split the "Digital Library of..." text into two lines
-    $pdf->write(8, "Digital Library of the Faculty of Arts,");
-    $pdf->Ln(9);
+    $pdf->write($footer_font, "Digital Library of the Faculty of Arts,");
+    $pdf->Ln($footer_font+1);
     $pdf->setX(round($origsizeX/2));
-    $pdf->write(8, "Masaryk University");
+    $pdf->write($footer_font, "Masaryk University");
   }
   else {
-    $pdf->write(8, "Digital Library of the Faculty of Arts, Masaryk University");
+    $pdf->write($footer_font, "Digital Library of the Faculty of Arts, Masaryk University");
   }
   $pdf->setX(round($origsizeX/2));
-  $pdf->Ln(12);
+  $pdf->Ln($footer_font+4);
   $pdf->setX(round($origsizeX/2));
-  $pdf->write(8, "digilib.phil.muni.cz");
+  $pdf->write($footer_font, "digilib.phil.muni.cz");
    
   $pdf->Output("F", $cover_pdf);
   $joinpdf = new mikehaertl\pdftk\Pdf([$cover_pdf, $input_pdf]);
