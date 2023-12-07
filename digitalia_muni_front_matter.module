@@ -40,7 +40,7 @@ function digitalia_muni_front_matter_file_download($uri) {
   } 
 
   $filename = $file_original->getFilename();
-  $temp_pdf = "/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/tmp/$filename";
+  $temp_pdf = "/tmp/$filename";
 
   if (file_exists($temp_pdf)) {
     return NULL;
@@ -293,8 +293,9 @@ function generate_front_matter($entity) {
   $license_id = $node->get('field_rights')->getValue() ? $node->get('field_rights')->getValue()[0]['target_id'] : '';
   $license = empty($license_id) ? '' : \Drupal\taxonomy\Entity\Term::load($license_id)->getName();
   $license_link = empty($license_id) ? '' : \Drupal\taxonomy\Entity\Term::load($license_id)->get('field_external_uri')->getValue()[0]['uri'];
-  $footer = "Copyright MU 2022";
+  $footer = "Copyright MU 2023";
   $isMonograph = $node->getType() == 'book' ? TRUE : FALSE;
+  //$isChapter = $node->getType() == 'chapter' ? true : false;
   $isbn_source = $isMonograph ? $node : $member_of;
   $field_isbn = $isbn_source->hasField('field_isbn') ? $isbn_source->get('field_isbn')->getValue() : [];
   $isbn_online = "";
@@ -337,7 +338,7 @@ function generate_front_matter($entity) {
   // get original file
   $file_original = File::load($entity->field_media_document->target_id);
   $file_name = $file_original->getFilename();
-  $input_pdf = "/var/www/html/drupal/web/modules/custom/digitalia_muni_front_matter/tmp/$file_name";
+  $input_pdf = "/tmp/$file_name";
   $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
   $originalpdf = new mikehaertl\pdftk\Pdf($input_pdf);
   $data = $originalpdf->getData();
@@ -370,9 +371,11 @@ function generate_front_matter($entity) {
     $pdf->Ln(round($origsizeY*0.1));
   }
 
+  // just for debug
   //$pdf->SetFont('Myfont', '', $fontsize);
-  //$pdf->Write($linesize, "DEBUG: $origsizeX x $origsizeY");
+  //$pdf->Write($linesize, "DEBUG: $type: '$citation_book_authors'");
   //$pdf->Ln(10);
+  
   // authors
   $pdf->SetFont('Myfont', '', $fontsize);
   $authorsprint = "";
@@ -397,10 +400,11 @@ function generate_front_matter($entity) {
     
   $pdf->Ln($linesize+$biggerspace);
   // citation
-  if ($isMonograph) {
+  //if ($isMonograph || $isChapter) {
+  if (isset($citation_book_authors) && $citation_book_authors != '') {
     $pdf->SetFont('Myfont', '', $fontsize);
-    $pdf->Write($linesize, "In: ");
-    $pdf->Write($linesize, $bookauthors . ". ");
+    //$pdf->Write($linesize, "In: ");
+    $pdf->Write($linesize, $citation_book_authors);
   }
   $pdf->SetFont('MyfontI', '', $fontsize);
   $pdf->Write($linesize, $citation_title . " ");
