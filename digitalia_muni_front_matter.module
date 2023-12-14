@@ -184,6 +184,8 @@ function generate_front_matter($entity) {
     return NULL;
   }
 
+  $node_changed = date('Ymd',$node->changed->getString());
+
   if (empty($node->get('field_member_of')->getValue()) or !$member_of = \Drupal\node\Entity\Node::load($node->get('field_member_of')->getValue()[0]['target_id'])) {
     \Drupal::logger('digitalia_muni_front_matter')->warning('Node \''.$node->getTitle().'\' with nid '.$node->id().' has empty field Member of.');
     return NULL;
@@ -337,6 +339,7 @@ function generate_front_matter($entity) {
 
   // get original file
   $file_original = File::load($entity->field_media_document->target_id);
+  $file_created = date('Ymd',$file_original->created->getString());
   $file_name = $file_original->getFilename();
   $input_pdf = "/tmp/$file_name";
   $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
