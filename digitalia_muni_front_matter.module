@@ -50,7 +50,7 @@ function digitalia_muni_front_matter_file_download($uri) {
 
   if (!file_exists($location)) {
     file_put_contents($temp_pdf, '');
-    $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
+    $url = 'https://digilib.phil.muni.cz'.$file_original->createFileUrl();
 
     $data = file_get_contents($url);
 
@@ -447,7 +447,13 @@ function generate_front_matter($entity) {
   if (strlen($version) > 0) {
     $pdf->SetFont('Myfont', '', $fontsize);
     $pdf->Write($linesize, "Access Date: $version");
+    $pdf->Ln($linesize);
   }
+
+  $pdf->Write($linesize, "Version: " . $file_created);
+
+  
+
   // footer
   // if page is smaller than 440 pt the Terms of use text is 3-lines and we must push it higher
   $footerY = -130;
