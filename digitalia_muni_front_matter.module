@@ -50,7 +50,7 @@ function digitalia_muni_front_matter_file_download($uri) {
 
   if (!file_exists($location)) {
     file_put_contents($temp_pdf, '');
-    $url = 'https://digilib.phil.muni.cz'.$file_original->createFileUrl();
+    $url = \Drupal::request()->getSchemeAndHttpHost().$file_original->createFileUrl();
 
     $data = file_get_contents($url);
 
@@ -342,7 +342,7 @@ function generate_front_matter($entity) {
   $file_created = date('Ymd',$file_original->created->getString());
   $file_name = $file_original->getFilename();
   $input_pdf = "/tmp/$file_name";
-  $url = 'http://digilib-devel.phil.muni.cz'.$file_original->createFileUrl();
+  $url = \Drupal::request()->getSchemeAndHttpHost().$file_original->createFileUrl();
   $originalpdf = new mikehaertl\pdftk\Pdf($input_pdf);
   $data = $originalpdf->getData();
   $dims = explode(" ", $data['PageMedia'][0]['Dimensions']);
