@@ -13,6 +13,10 @@ require_once("$MYLIBDIR/vendor/autoload.php");
 
 function digitalia_muni_front_matter_file_download($uri) {
 
+  if(\Drupal::request()->query->get("original") == "true") {
+    return NULL;
+  }
+
   if(!strpos($uri, 'pdf/') and !strpos($uri, 'monography/')){
     return NULL;
   }
