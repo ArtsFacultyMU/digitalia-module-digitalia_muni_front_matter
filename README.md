@@ -3,7 +3,7 @@ Module for creating the front matter before every PDF full text file.
 
 ## Bugfix (pdftk won't open PDF)
 
-The module rely on system's PDFtk (the binary *pdftk* present in `$PATH`, usually `/usr/bin/` directory). The older versions of PDFtk (prior to **3.3.3** version) have bug which causes some PDFs might not open.
+The module relies on system's PDFtk (the binary *pdftk* present in `$PATH`, usually `/usr/bin/` directory). The older versions of PDFtk (prior to **3.3.3** version) have a bug which causes some PDFs might not open.
 
 The module version **3.3.3** (and higher) works fine. Both Ubuntu 20 and 22 don't have this version in their official repos. 
 
