@@ -75,6 +75,11 @@ function digitalia_muni_front_matter_file_download($uri) {
       return NULL;
     }
     \Drupal::logger('digitalia_muni_front_matter')->notice('Created forefront for file '.$filename);
+
+    // Get the new filesize and update the File size field in Media.
+    $filesize = filesize($result);
+    $media->field_file_size = $filesize;
+    $media->save();    
   }
 
   $new_url = '/sites/default/files/pdf/'.$filename;
